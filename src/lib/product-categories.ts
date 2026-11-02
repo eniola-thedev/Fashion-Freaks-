@@ -1,0 +1,18 @@
+export const MAIN_PRODUCT_CATEGORIES = [
+  "T-Shirts",
+  "Shirts",
+  "Pants",
+  "Jeans",
+  "Joggers",
+  "Shorts",
+  "Hoodies",
+  "Sweatshirts & Sweat Tops",
+  "Jackets",
+  "Co-Ord Sets",
+  "Tracksuits",
+  "Knitwear",
+  "Tank Tops & Vests",
+  "Cargo Pants",
+  "Outerwear",
+  "Kidswear",
+] as const;
