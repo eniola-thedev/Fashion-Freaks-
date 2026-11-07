@@ -93,7 +93,9 @@ export default function AccountAuthForm({
       };
 
       if (!response.ok) {
-        throw new Error(result.error || "We couldn’t complete that request.");
+        throw new Error(
+          result.error || result.message || "We couldn’t complete that request."
+        );
       }
 
       if (mode === "forgot") {
