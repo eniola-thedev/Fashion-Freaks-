@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   matchesPaystackTransaction,
   parsePaystackTransaction,
@@ -75,9 +75,13 @@ export async function POST(request: Request) {
   }
 
   try {
-    const order = await prisma.order.findUnique({
-      where: { paymentReference: transaction.reference },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: order, error: orderError } = await supabase
+      .from("Order")
+      .select("*")
+      .eq("paymentReference", transaction.reference)
+      .maybeSingle();
+    if (orderError) throw orderError;
 
     if (!order) {
       console.warn("Paystack webhook: no matching order found.");
@@ -92,17 +96,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ received: true });
     }
 
-    await prisma.order.updateMany({
-      where: {
-        id: order.id,
-        paymentReference: transaction.reference,
-        paymentStatus: "PENDING",
-      },
-      data: {
-        paymentStatus: "PAID",
-        orderStatus: "PROCESSING",
-      },
-    });
+    const { error: updateError } = await supabase
+      .from("Order")
+      .update({ paymentStatus: "PAID", orderStatus: "PROCESSING" })
+      .eq("id", order.id)
+      .eq("paymentReference", transaction.reference)
+      .eq("paymentStatus", "PENDING");
+    if (updateError) throw updateError;
 
     return NextResponse.json({ received: true });
   } catch (error) {

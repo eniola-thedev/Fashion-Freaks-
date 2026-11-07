@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminSession } from "@/lib/auth";
 import {
-  CloudinaryConfigurationError,
+  ProductImageStorageConfigurationError,
   uploadProductImage,
-} from "@/lib/cloudinary";
+} from "@/lib/product-image-storage";
 import {
   getProductImageLimits,
   ProductImageValidationError,
@@ -149,7 +149,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (error instanceof CloudinaryConfigurationError) {
+    if (error instanceof ProductImageStorageConfigurationError) {
       return NextResponse.json(
         { error: error.message },
         { status: 503 }

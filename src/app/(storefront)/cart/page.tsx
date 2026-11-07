@@ -35,7 +35,7 @@ export default function CartPage() {
   );
   const [availability, setAvailability] = useState<{
     cartKey: string;
-    stockByVariant: Record<string, number>;
+    availableVariantIds: string[];
     error: string;
   } | null>(null);
   const cartKey = items
@@ -55,15 +55,15 @@ export default function CartPage() {
           cache: "no-store",
         });
         if (!response.ok) {
-          throw new Error("We couldn't check current stock. Please try again.");
+          throw new Error("We couldn't check product availability. Please try again.");
         }
 
         const products: unknown = await response.json();
         if (!Array.isArray(products)) {
-          throw new Error("The stock response was not valid.");
+          throw new Error("The availability response was not valid.");
         }
 
-        const available: Record<string, number> = {};
+        const availableVariantIds: string[] = [];
         for (const product of products) {
           if (!product || typeof product !== "object" || !("variants" in product)) {
             continue;
@@ -75,28 +75,24 @@ export default function CartPage() {
               variant &&
               typeof variant === "object" &&
               "id" in variant &&
-              "stock" in variant &&
-              typeof variant.id === "string" &&
-              typeof variant.stock === "number" &&
-              Number.isSafeInteger(variant.stock) &&
-              variant.stock >= 0
+              typeof variant.id === "string"
             ) {
-              available[variant.id] = variant.stock;
+              availableVariantIds.push(variant.id);
             }
           }
         }
 
-        setAvailability({ cartKey, stockByVariant: available, error: "" });
+        setAvailability({ cartKey, availableVariantIds, error: "" });
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
         console.error("Cart availability check failed:", error);
         setAvailability({
           cartKey,
-          stockByVariant: {},
+          availableVariantIds: [],
           error:
             error instanceof Error
               ? error.message
-              : "We couldn't check current stock. Please try again.",
+              : "We couldn't check product availability. Please try again.",
         });
       }
     }
@@ -107,23 +103,21 @@ export default function CartPage() {
 
   const currentAvailability =
     availability?.cartKey === cartKey ? availability : null;
-  const stockByVariant = currentAvailability?.stockByVariant ?? {};
-  const stockError = currentAvailability?.error ?? "";
-  const stockLoading = loaded && Boolean(cartKey) && !currentAvailability;
+  const availableVariantIds = currentAvailability?.availableVariantIds ?? [];
+  const availabilityError = currentAvailability?.error ?? "";
+  const availabilityLoading = loaded && Boolean(cartKey) && !currentAvailability;
 
   function saveCart(updatedItems: CartItem[]) {
     writeCart(updatedItems);
   }
 
   function changeQuantity(variantId: string, amount: number) {
-    const availableStock = stockByVariant[variantId] ?? 0;
-    const maxQuantity = Math.max(1, Math.min(10, availableStock));
     const updated = items.map((item) =>
       item.variantId === variantId
         ? {
             ...item,
             quantity: Math.min(
-              maxQuantity,
+              10,
               Math.max(1, item.quantity + amount)
             ),
           }
@@ -149,10 +143,10 @@ export default function CartPage() {
     0
   );
   const unavailableItems = items.filter(
-    (item) => (stockByVariant[item.variantId] ?? 0) < item.quantity
+    (item) => !availableVariantIds.includes(item.variantId)
   );
   const canCheckout =
-    !stockLoading && !stockError && unavailableItems.length === 0;
+    !availabilityLoading && !availabilityError && unavailableItems.length === 0;
   if (!loaded) {
     return (
       <main className="cart-page">
@@ -226,7 +220,7 @@ export default function CartPage() {
                         onClick={() =>
                           changeQuantity(item.variantId, -1)
                         }
-                        disabled={item.quantity <= 1 || stockLoading}
+                        disabled={item.quantity <= 1 || availabilityLoading}
                         aria-label={`Decrease ${item.name} quantity`}
                       >
                         −
@@ -240,10 +234,9 @@ export default function CartPage() {
                           changeQuantity(item.variantId, 1)
                         }
                         disabled={
-                          stockLoading ||
-                          Boolean(stockError) ||
-                          item.quantity >=
-                            Math.min(10, stockByVariant[item.variantId] ?? 0)
+                          availabilityLoading ||
+                          Boolean(availabilityError) ||
+                          item.quantity >= 10
                         }
                         aria-label={`Increase ${item.name} quantity`}
                       >
@@ -290,11 +283,11 @@ export default function CartPage() {
               Delivery fees are not included in this subtotal.
             </p>
 
-            {stockLoading && <p role="status">Checking current availability...</p>}
-            {stockError && <p className="cart-availability-error" role="alert">{stockError}</p>}
-            {!stockLoading && !stockError && unavailableItems.length > 0 && (
+            {availabilityLoading && <p role="status">Checking current availability...</p>}
+            {availabilityError && <p className="cart-availability-error" role="alert">{availabilityError}</p>}
+            {!availabilityLoading && !availabilityError && unavailableItems.length > 0 && (
               <p className="cart-availability-error" role="alert">
-                Stock changed for {unavailableItems.map((item) => item.name).join(", ")}. Update or remove those items before checkout.
+                Some options in your bag are no longer available. Remove {unavailableItems.map((item) => item.name).join(", ")} before checkout.
               </p>
             )}
             {canCheckout ? (

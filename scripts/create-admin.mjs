@@ -1,9 +1,23 @@
-import { PrismaClient } from "@prisma/client";
-import bcrypt from "bcryptjs";
+import { createClient } from "@supabase/supabase-js";
+import nextEnv from "@next/env";
 import readline from "node:readline";
 import { stdin, stdout } from "node:process";
 
-const prisma = new PrismaClient();
+nextEnv.loadEnvConfig(process.cwd());
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  throw new Error(
+    "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to create an administrator."
+  );
+}
+const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+});
 
 const rl = readline.createInterface({
   input: stdin,
@@ -63,16 +77,6 @@ async function main() {
     throw new Error("Please enter a valid email address.");
   }
 
-  const existingUser = await prisma.user.findUnique({
-    where: { email },
-  });
-
-  if (existingUser) {
-    throw new Error(
-      "An account with that email already exists."
-    );
-  }
-
   const password = await askHidden("Admin password: ");
 
   if (password.length < 12) {
@@ -89,25 +93,38 @@ async function main() {
     throw new Error("The passwords do not match.");
   }
 
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  const user = await prisma.user.create({
-    data: {
-      email,
-      passwordHash,
-      role: "ADMIN",
-      isActive: true,
-    },
-    select: {
-      id: true,
-      email: true,
-      role: true,
-      createdAt: true,
-    },
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { display_name: "Store administrator" },
   });
+  if (error || !data.user) {
+    throw new Error(error?.message ?? "Supabase did not create the administrator.");
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from("UserProfile")
+    .update({ email, role: "ADMIN", isActive: true })
+    .eq("id", data.user.id)
+    .select("id, email, role")
+    .single();
+  if (profileError) {
+    const { error: cleanupError } = await supabase.auth.admin.deleteUser(
+      data.user.id
+    );
+    if (cleanupError) {
+      throw new Error(
+        `Could not promote the administrator (${profileError.message}); the new auth user also could not be removed (${cleanupError.message}).`
+      );
+    }
+    throw new Error(
+      `Could not promote the administrator. The new auth user was removed: ${profileError.message}`
+    );
+  }
 
   console.log("\nAdministrator created successfully.");
-  console.log(user);
+  console.log(profile);
 }
 
 main()
@@ -118,5 +135,4 @@ main()
   })
   .finally(async () => {
     rl.close();
-    await prisma.$disconnect();
   });

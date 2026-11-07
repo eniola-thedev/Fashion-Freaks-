@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import PasswordInput from "@/app/PasswordInput";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -111,9 +112,8 @@ export default function AdminLoginPage() {
             Password
           </label>
 
-          <input
+          <PasswordInput
             id="admin-password"
-            type="password"
             name="password"
             autoComplete="current-password"
             placeholder="Enter your password"
@@ -140,6 +140,10 @@ export default function AdminLoginPage() {
             {loading ? "Signing in..." : "Sign in"}
           </button>
         </form>
+
+        <Link href="/account/forgot-password" className="admin-login-back">
+          Forgot your password?
+        </Link>
 
         <Link href="/" className="admin-login-back">
           ← Back to Fashion Freaks

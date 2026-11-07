@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAdminSession } from "@/lib/auth";
+import type { Json } from "@/lib/supabase/database.types";
 import {
   deleteProductImage,
-  isManagedProductPublicId,
-  isProductCloudinaryAsset,
-} from "@/lib/cloudinary";
+  getProductImageUrlReference,
+  isManagedProductImagePublicId,
+  isProductImageAsset,
+} from "@/lib/product-image-storage";
 import { verifyProductImageProof } from "@/lib/product-image-proof.mjs";
 import { parseProductVariants } from "@/lib/product-variants";
 import {
@@ -17,6 +19,20 @@ import {
 
 type RouteContext = {
   params: Promise<{ id: string }>;
+};
+
+type UpdatedProduct = {
+  imagePublicId: string | null;
+  colours: {
+    images: { imagePublicId: string | null }[];
+  }[];
+};
+
+type DeletedProduct = {
+  imagePublicId: string | null;
+  colours: {
+    images: { imagePublicId: string | null }[];
+  }[];
 };
 
 function isValidImageUrl(value: unknown) {
@@ -52,14 +68,15 @@ export async function PATCH(
   try {
     const { id } = await context.params;
     const body = await request.json();
+    const supabase = createSupabaseAdminClient();
 
-    const existing = await prisma.product.findUnique({
-      where: { id },
-      include: {
-        variants: { where: { isActive: true } },
-        colours: { include: { images: true } },
-      },
-    });
+    const { data: existing, error: existingError } = await supabase
+      .from("Product")
+      .select("*, variants:ProductVariant(*), colours:ProductColour(*, images:ProductColourImage(*))")
+      .eq("id", id)
+      .eq("variants.isActive", true)
+      .maybeSingle();
+    if (existingError) throw existingError;
 
     if (!existing) {
       return NextResponse.json(
@@ -217,7 +234,7 @@ export async function PATCH(
         body.imagePublicId !== undefined &&
         body.imagePublicId !== null &&
         (typeof body.imagePublicId !== "string" ||
-          !isProductCloudinaryAsset(
+          !isProductImageAsset(
             data.imageUrl,
             body.imagePublicId.trim()
           ) ||
@@ -309,7 +326,7 @@ export async function PATCH(
           colourInputs,
           existing.colours.flatMap((colour) => colour.images),
           verifyProductImageProof,
-          isProductCloudinaryAsset
+          isProductImageAsset
         )
       ) {
         return NextResponse.json(
@@ -328,18 +345,21 @@ export async function PATCH(
       )
     );
     if (removedVariantIds.length > 0) {
-      const removed = await prisma.productVariant.findMany({
-        where: { id: { in: removedVariantIds }, productId: id },
-        select: { id: true, colour: true, size: true },
-      });
-      if (removed.length !== removedVariantIds.length) {
+      const { data: removed, error: removedError } = await supabase
+        .from("ProductVariant")
+        .select("id, colour, size")
+        .in("id", removedVariantIds)
+        .eq("productId", id);
+      if (removedError) throw removedError;
+      const removedVariants = removed ?? [];
+      if (removedVariants.length !== removedVariantIds.length) {
         return NextResponse.json(
           { error: "One or more variants no longer belong to this product." },
           { status: 409 }
         );
       }
       if (
-        removed.some((variant) =>
+        removedVariants.some((variant) =>
           selectedCombinations.has(
             JSON.stringify([
               variant.colour.toLocaleLowerCase(),
@@ -355,129 +375,60 @@ export async function PATCH(
       }
     }
 
-    const updateResult = await prisma.$transaction(async (tx) => {
-      await tx.product.update({ where: { id }, data });
-      let retainedHistoricalVariants = 0;
-
-      for (const variant of variantInputs ?? []) {
-        await tx.productVariant.upsert({
-          where: {
-            productId_colour_size: {
-              productId: id,
-              colour: variant.colour,
-              size: variant.size,
-            },
-          },
-          create: {
-            productId: id,
-            ...variant,
-          },
-          update: { stock: variant.stock, isActive: true },
-        });
+    const { data: updateResult, error: updateError } = await supabase.rpc(
+      "admin_update_product",
+      {
+        p_product_id: id,
+        p_data: data,
+        p_variants: variantInputs ?? null,
+        p_colours:
+          colourInputs?.map(({ name, hexColor, images }) => ({
+            name,
+            hexColor,
+            images: images.map(
+              ({ imageUrl, imagePublicId, isPrimary }) => ({
+                imageUrl,
+                imagePublicId,
+                isPrimary,
+              })
+            ),
+          })) ?? null,
+        p_removed_variant_ids: removedVariantIds as string[],
       }
-
-      if (colourInputs) {
-        const keptColourIds: string[] = [];
-        for (const [sortOrder, colour] of colourInputs.entries()) {
-          const savedColour = await tx.productColour.upsert({
-            where: {
-              productId_name: { productId: id, name: colour.name },
-            },
-            create: {
-              productId: id,
-              name: colour.name,
-              hexColor: colour.hexColor,
-              sortOrder,
-            },
-            update: {
-              hexColor: colour.hexColor,
-              sortOrder,
-            },
-            select: { id: true },
-          });
-          keptColourIds.push(savedColour.id);
-        }
-
-        await tx.productColourImage.deleteMany({
-          where: { colour: { productId: id } },
-        });
-
-        for (const colour of colourInputs) {
-          const savedColour = await tx.productColour.findUniqueOrThrow({
-            where: {
-              productId_name: { productId: id, name: colour.name },
-            },
-            select: { id: true },
-          });
-          if (colour.images.length > 0) {
-            await tx.productColourImage.createMany({
-              data: colour.images.map(
-                ({ imageUrl, imagePublicId, isPrimary }, position) => ({
-                  colourId: savedColour.id,
-                  imageUrl,
-                  imagePublicId,
-                  isPrimary,
-                  position,
-                })
-              ),
-            });
-          }
-        }
-
-        if (keptColourIds.length > 0) {
-          await tx.productColour.deleteMany({
-            where: {
-              productId: id,
-              id: { notIn: keptColourIds },
-            },
-          });
-        } else {
-          await tx.productColour.deleteMany({
-            where: { productId: id },
-          });
-        }
+    );
+    if (updateError) {
+      if (updateError.code === "P0002") {
+        return NextResponse.json(
+          { error: "Product not found." },
+          { status: 404 }
+        );
       }
-
-      for (const variantId of removedVariantIds as string[]) {
-        const orderItem = await tx.orderItem.findFirst({
-          where: { variantId },
-          select: { id: true },
-        });
-        if (orderItem) {
-          retainedHistoricalVariants += 1;
-          await tx.productVariant.updateMany({
-            where: { id: variantId, productId: id },
-            data: { stock: 0, isActive: false },
-          });
-        } else {
-          await tx.productVariant.deleteMany({
-            where: { id: variantId, productId: id },
-          });
-        }
-      }
-
-      return {
-        product: await tx.product.findUniqueOrThrow({
-          where: { id },
-          include: {
-            variants: { where: { isActive: true } },
-            colours: {
-              include: {
-                images: { orderBy: { position: "asc" } },
-              },
-              orderBy: { sortOrder: "asc" },
-            },
-          },
-        }),
-        retainedHistoricalVariants,
-      };
-    });
-    const updated = updateResult.product;
+      throw updateError;
+    }
+    if (
+      !updateResult ||
+      typeof updateResult !== "object" ||
+      Array.isArray(updateResult)
+    ) {
+      throw new Error("Supabase did not return the updated product.");
+    }
+    const updatePayload = updateResult as { [key: string]: Json | undefined };
+    if (
+      !updatePayload.product ||
+      typeof updatePayload.product !== "object" ||
+      Array.isArray(updatePayload.product) ||
+      typeof updatePayload.retainedHistoricalVariants !== "number"
+    ) {
+      throw new Error("Supabase returned an invalid product update response.");
+    }
+    const updated = updatePayload.product as unknown as UpdatedProduct;
+    const retainedHistoricalVariants =
+      updatePayload.retainedHistoricalVariants;
 
     const warnings: string[] = [];
-    if (updateResult.retainedHistoricalVariants > 0) {
+    if (retainedHistoricalVariants > 0) {
       warnings.push(
-        `${updateResult.retainedHistoricalVariants} variant(s) linked to order history were kept with zero stock.`
+        `${retainedHistoricalVariants} variant(s) linked to order history were kept with zero stock.`
       );
     }
     if (
@@ -497,7 +448,7 @@ export async function PATCH(
           error
         );
         warnings.push(
-          "The product was saved, but its previous Cloudinary image needs manual cleanup."
+          "The product was saved, but its previous uploaded image needs manual cleanup."
         );
       }
     }
@@ -564,95 +515,69 @@ export async function DELETE(
 
   try {
     const { id } = await context.params;
-    const deletedProduct = await prisma.$transaction(async (tx) => {
-      const product = await tx.product.findUnique({
-        where: { id },
-        select: {
-          imageUrl: true,
-          imagePublicId: true,
-          colours: {
-            select: {
-              images: {
-                select: {
-                  imageUrl: true,
-                  imagePublicId: true,
-                },
-              },
-            },
-          },
-        },
-      });
+    const supabase = createSupabaseAdminClient();
+    const { data: deletedProduct, error: deleteError } = await supabase.rpc(
+      "admin_delete_product",
+      { p_product_id: id }
+    );
+    if (deleteError) throw deleteError;
 
-      if (!product) return null;
-
-      await tx.product.delete({ where: { id } });
-
-      return [
-        ...(product.imagePublicId
-          ? [{
-              imagePublicId: product.imagePublicId,
-              imageUrl: product.imageUrl,
-            }]
-          : []),
-        ...product.colours.flatMap((colour) =>
-          colour.images.flatMap((image) =>
-            image.imagePublicId
-              ? [{
-                  imagePublicId: image.imagePublicId,
-                  imageUrl: image.imageUrl,
-                }]
-              : []
-          )
-        ),
-      ];
-    });
-
-    if (!deletedProduct) {
+    if (
+      !deletedProduct ||
+      typeof deletedProduct !== "object" ||
+      Array.isArray(deletedProduct)
+    ) {
       return NextResponse.json(
         { error: "Product not found." },
         { status: 404 }
       );
     }
+    const deletedProductRecord = deletedProduct as DeletedProduct;
 
+    const colourImages = Array.isArray(deletedProductRecord.colours)
+      ? deletedProductRecord.colours.flatMap((colour) =>
+          Array.isArray(colour.images) ? colour.images : []
+        )
+      : [];
     const imageAssets = new Set(
-      deletedProduct.flatMap((image) =>
-        image.imagePublicId &&
-        isManagedProductPublicId(image.imagePublicId)
-          ? [image.imagePublicId]
-          : []
+      [
+        deletedProductRecord.imagePublicId,
+        ...colourImages.map((image) => image.imagePublicId),
+      ].filter(
+        (publicId): publicId is string =>
+          typeof publicId === "string" &&
+          isManagedProductImagePublicId(publicId)
       )
     );
     let imageCleanupFailed = false;
 
     for (const imagePublicId of imageAssets) {
       try {
-        const [productReference, colourImageReference, variantReference] =
-          await Promise.all([
-            prisma.product.findFirst({
-              where: {
-                OR: [
-                  { imagePublicId },
-                  { imageUrl: { contains: imagePublicId } },
-                ],
-              },
-              select: { id: true },
-            }),
-            prisma.productColourImage.findFirst({
-              where: {
-                OR: [
-                  { imagePublicId },
-                  { imageUrl: { contains: imagePublicId } },
-                ],
-              },
-              select: { id: true },
-            }),
-            prisma.productVariant.findFirst({
-              where: { imageUrl: { contains: imagePublicId } },
-              select: { id: true },
-            }),
-          ]);
+        const imageUrlReference = getProductImageUrlReference(imagePublicId);
+        const [
+          productIdReference,
+          productUrlReference,
+          colourIdReference,
+          colourUrlReference,
+          variantUrlReference,
+        ] = await Promise.all([
+          supabase.from("Product").select("id").eq("imagePublicId", imagePublicId).limit(1),
+          supabase.from("Product").select("id").ilike("imageUrl", `%${imageUrlReference}%`).limit(1),
+          supabase.from("ProductColourImage").select("id").eq("imagePublicId", imagePublicId).limit(1),
+          supabase.from("ProductColourImage").select("id").ilike("imageUrl", `%${imageUrlReference}%`).limit(1),
+          supabase.from("ProductVariant").select("id").ilike("imageUrl", `%${imageUrlReference}%`).limit(1),
+        ]);
+        const referenceResults = [
+          productIdReference,
+          productUrlReference,
+          colourIdReference,
+          colourUrlReference,
+          variantUrlReference,
+        ];
+        const referenceError = referenceResults.find((result) => result.error)?.error;
+        if (referenceError) throw referenceError;
 
-        if (productReference || colourImageReference || variantReference) {
+        if (referenceResults.some((result) => result.data?.length)) {
           continue;
         }
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAdminSession } from "@/lib/auth";
-import { isProductCloudinaryAsset } from "@/lib/cloudinary";
+import { isProductImageAsset } from "@/lib/product-image-storage";
 import { verifyProductImageProof } from "@/lib/product-image-proof.mjs";
 import { parseProductVariants } from "@/lib/product-variants";
 import {
@@ -49,24 +49,15 @@ export async function GET() {
   }
 
   try {
-    const products = await prisma.product.findMany({
-      orderBy: { createdAt: "desc" },
-      include: {
-        variants: {
-          where: { isActive: true },
-          orderBy: [
-            { colour: "asc" },
-            { size: "asc" },
-          ],
-        },
-        colours: {
-          include: {
-            images: { orderBy: { position: "asc" } },
-          },
-          orderBy: { sortOrder: "asc" },
-        },
-      },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: products, error } = await supabase
+      .from("Product")
+      .select(
+        "*, variants:ProductVariant(*), colours:ProductColour(*, images:ProductColourImage(*))"
+      )
+      .eq("variants.isActive", true)
+      .order("createdAt", { ascending: false });
+    if (error) throw error;
 
     return NextResponse.json({ products });
   } catch (error) {
@@ -162,13 +153,13 @@ export async function POST(request: NextRequest) {
         colours ?? [],
         [],
         verifyProductImageProof,
-        isProductCloudinaryAsset
+        isProductImageAsset
       ) ||
       !isValidImageUrl(imageUrl) ||
       (body.imagePublicId !== undefined &&
         body.imagePublicId !== null &&
         (typeof body.imagePublicId !== "string" ||
-          !isProductCloudinaryAsset(imageUrl, imagePublicId) ||
+          !isProductImageAsset(imageUrl, imagePublicId) ||
           !verifyProductImageProof(
             body.imageUploadProof,
             imageUrl,
@@ -190,10 +181,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const existing = await prisma.product.findUnique({
-      where: { slug },
-      select: { id: true },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: existing, error: existingError } = await supabase
+      .from("Product")
+      .select("id")
+      .eq("slug", slug)
+      .maybeSingle();
+    if (existingError) throw existingError;
 
     if (existing) {
       return NextResponse.json(
@@ -205,50 +199,47 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const product = await prisma.product.create({
-      data: {
-        name,
-        slug,
-        description,
-        price,
-        category,
-        colour: colour || null,
-        imageUrl: imageUrl || null,
-        imagePublicId,
-        discountPrice: discountPrice ?? null,
-        isFeatured: isFeatured ?? false,
-        isActive: true,
-        variants: {
-          create: variants ?? [],
+    const { data: product, error: createError } = await supabase.rpc(
+      "admin_create_product",
+      {
+        p_product: {
+          name,
+          slug,
+          description,
+          price,
+          category,
+          colour: colour || null,
+          imageUrl: imageUrl || null,
+          imagePublicId,
+          discountPrice: discountPrice ?? null,
+          isFeatured: isFeatured ?? false,
         },
-        colours: {
-          create: (colours ?? []).map((productColour, sortOrder) => ({
-            name: productColour.name,
-            hexColor: productColour.hexColor,
-            sortOrder,
-            images: {
-              create: productColour.images.map(
-                ({ imageUrl: colourImageUrl, imagePublicId: colourImagePublicId, isPrimary }, position) => ({
-                  imageUrl: colourImageUrl,
-                  imagePublicId: colourImagePublicId,
-                  isPrimary,
-                  position,
-                })
-              ),
-            },
-          })),
-        },
-      },
-      include: {
-        variants: true,
-        colours: {
-          include: {
-            images: { orderBy: { position: "asc" } },
+        p_variants: variants ?? [],
+        p_colours: (colours ?? []).map(({ name, hexColor, images }) => ({
+          name,
+          hexColor,
+          images: images.map(
+            ({ imageUrl, imagePublicId, isPrimary }) => ({
+              imageUrl,
+              imagePublicId,
+              isPrimary,
+            })
+          ),
+        })),
+      }
+    );
+    if (createError) {
+      if (createError.code === "23505") {
+        return NextResponse.json(
+          {
+            error:
+              "A product with a similar name already exists. Choose a different name.",
           },
-          orderBy: { sortOrder: "asc" },
-        },
-      },
-    });
+          { status: 409 }
+        );
+      }
+      throw createError;
+    }
 
     return NextResponse.json(
       { product },

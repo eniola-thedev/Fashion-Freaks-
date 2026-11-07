@@ -8,6 +8,8 @@ const required = [
   "E2E_BASE_URL",
   "E2E_ADMIN_EMAIL",
   "E2E_ADMIN_PASSWORD",
+  "E2E_CUSTOMER_EMAIL",
+  "E2E_CUSTOMER_PASSWORD",
   "E2E_IMAGE_PATH",
   "E2E_PAYSTACK_SECRET_KEY",
 ];
@@ -60,9 +62,9 @@ let sessionCookie = "";
 let createdProduct;
 let createdOrderNumber = "";
 
-async function call(path, options = {}) {
+async function call(path, options = {}, cookie = sessionCookie) {
   const headers = new Headers(options.headers);
-  if (sessionCookie) headers.set("Cookie", sessionCookie);
+  if (cookie) headers.set("Cookie", cookie);
   const response = await fetch(new URL(path, baseUrl), {
     ...options,
     headers,
@@ -86,6 +88,15 @@ async function call(path, options = {}) {
   }
 
   return { response, data };
+}
+
+function getSupabaseSessionCookie(response) {
+  const cookies = response.headers
+    .getSetCookie()
+    .filter((value) => value.startsWith("sb-"))
+    .map((value) => value.split(";", 1)[0]);
+  assert.ok(cookies.length, "Supabase login did not create an authenticated session.");
+  return cookies.join("; ");
 }
 
 async function assertAdminRedirect() {
@@ -114,8 +125,8 @@ async function uploadImage() {
     method: "POST",
     body: form,
   });
-  assert.match(data.publicId, /^fashion-freaks\/products\//);
-  assert.match(data.imageUrl, /^https:\/\/res\.cloudinary\.com\//);
+  assert.match(data.publicId, /^supabase\/fashion-freaks\/products\//);
+  assert.match(data.imageUrl, /^https:\/\/[^/]+\/storage\/v1\/object\/public\//);
   assert.ok(data.proof);
   return data;
 }
@@ -144,11 +155,8 @@ try {
       password: process.env.E2E_ADMIN_PASSWORD,
     }),
   });
-  const cookie = login.response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith("fashion_freaks_admin_session="));
-  assert.ok(cookie, "Admin login did not create an authenticated session.");
-  sessionCookie = cookie.split(";", 1)[0];
+  const adminCookie = getSupabaseSessionCookie(login.response);
+  sessionCookie = adminCookie;
 
   const session = await call("/api/auth/session");
   assert.equal(session.data.authenticated, true);
@@ -264,7 +272,7 @@ try {
   assert.equal(
     replacement.data.warning,
     undefined,
-    "The replaced Cloudinary asset could not be cleaned up."
+    "The replaced product image could not be cleaned up."
   );
 
   const { data: productList } = await call("/api/products");
@@ -290,7 +298,7 @@ try {
   const imageResponse = await fetch(replacementImage.imageUrl, {
     method: "HEAD",
   });
-  assert.ok(imageResponse.ok, "Uploaded Cloudinary image is not reachable.");
+  assert.ok(imageResponse.ok,   "Uploaded Supabase Storage image is not reachable.");
   assert.ok(
     visibleProduct?.colours.every((colour) =>
       colour.images.some((image) => image.isPrimary)
@@ -339,6 +347,16 @@ try {
     "Shipbubble did not return a valid sandbox delivery rate."
   );
 
+  const customerLogin = await call("/api/customer/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: process.env.E2E_CUSTOMER_EMAIL,
+      password: process.env.E2E_CUSTOMER_PASSWORD,
+    }),
+  });
+  const customerCookie = getSupabaseSessionCookie(customerLogin.response);
+
   const order = await call("/api/orders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -348,14 +366,14 @@ try {
       items,
       expectedDeliveryFee: deliveryQuote.deliveryFee,
     }),
-  });
+  }, customerCookie);
   createdOrderNumber = order.data.order.orderNumber;
 
   const initialized = await call("/api/payments/initialize", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ orderNumber: createdOrderNumber }),
-  });
+  }, customerCookie);
   assert.match(initialized.data.authorizationUrl, /^https:\/\/checkout\.paystack\.com\//);
 
   const { data: orders } = await call("/api/admin/orders");
@@ -440,7 +458,7 @@ try {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reference: savedOrder.paymentReference }),
-  });
+  }, customerCookie);
   assert.equal(verify.data.verified, true);
   assert.equal(verify.data.orderNumber, createdOrderNumber);
 
@@ -450,6 +468,7 @@ try {
     body: JSON.stringify({ status: "SHIPPED" }),
   });
 
+  await call("/api/customer/auth/logout", { method: "POST" }, customerCookie);
   await call("/api/auth/logout", { method: "POST" });
   sessionCookie = "";
   const signedOutSession = await fetch(new URL("/api/auth/session", baseUrl), {
@@ -458,7 +477,7 @@ try {
   assert.equal(signedOutSession.status, 401);
   await assertAdminRedirect();
 
-  sessionCookie = cookie.split(";", 1)[0];
+  sessionCookie = adminCookie;
   await call(`/api/admin/products/${createdProduct.id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

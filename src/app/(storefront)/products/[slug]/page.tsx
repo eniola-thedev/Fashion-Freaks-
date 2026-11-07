@@ -1,8 +1,7 @@
 
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import type { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import ProductDetails from "./ProductDetails";
 
 export const instant = false;
@@ -15,60 +14,26 @@ export default async function ProductPage({ params }: PageProps) {
   await connection();
   const { slug } = await params;
 
-  const productSelect = {
-    id: true,
-    name: true,
-    slug: true,
-    description: true,
-    price: true,
-    discountPrice: true,
-    isFeatured: true,
-    category: true,
-    imageUrl: true,
-    isActive: true,
-    variants: {
-      where: { isActive: true },
-      select: {
-        id: true,
-        colour: true,
-        size: true,
-        stock: true,
-        imageUrl: true,
-      },
-      orderBy: [{ colour: "asc" }, { size: "asc" }],
-    },
-    colours: {
-      select: {
-        id: true,
-        name: true,
-        hexColor: true,
-        images: {
-          select: {
-            id: true,
-            imageUrl: true,
-            position: true,
-            isPrimary: true,
-          },
-          orderBy: { position: "asc" },
-        },
-      },
-      orderBy: { sortOrder: "asc" },
-    },
-  } satisfies Prisma.ProductSelect;
+  const supabase = createSupabaseAdminClient();
+  const productSelection =
+    "id, name, slug, description, price, discountPrice, isFeatured, category, imageUrl, isActive, variants:ProductVariant(id, colour, size, imageUrl, isActive), colours:ProductColour(id, name, hexColor, sortOrder, images:ProductColourImage(id, imageUrl, position, isPrimary))";
+  const findProduct = async (value: string) => {
+    const { data, error } = await supabase
+      .from("Product")
+      .select(productSelection)
+      .eq("slug", value)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  };
 
-  let product = await prisma.product.findUnique({
-    where: { slug },
-    select: productSelect,
-  });
+  let product = await findProduct(slug);
 
   if (!product) {
     try {
       const decodedSlug = decodeURIComponent(slug);
       if (decodedSlug !== slug) {
-        product = await prisma.product.findUnique({
-          where: { slug: decodedSlug },
-          select: productSelect,
-        });
+        product = await findProduct(decodedSlug);
       }
     } catch (error) {
       if (error instanceof URIError) {
@@ -95,11 +60,10 @@ export default async function ProductPage({ params }: PageProps) {
         isFeatured: product.isFeatured,
         category: product.category,
         imageUrl: product.imageUrl,
-        variants: product.variants.map((variant) => ({
+        variants: product.variants.filter((variant) => variant.isActive).map((variant) => ({
           id: variant.id,
           colour: variant.colour,
           size: variant.size,
-          stock: variant.stock,
           imageUrl: variant.imageUrl,
         })),
         colours: product.colours.map((colour) => ({

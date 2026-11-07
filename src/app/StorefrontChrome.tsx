@@ -10,6 +10,7 @@ import {
   subscribeToCart,
 } from "@/lib/cart";
 import { whatsappUrl } from "@/lib/whatsapp";
+import CustomerAccountMenu from "./(storefront)/account/CustomerAccountMenu";
 
 export default function StorefrontChrome({
   children,
@@ -45,30 +46,33 @@ export default function StorefrontChrome({
           <Link href="/#story">Our story</Link>
         </nav>
 
-        <Link
-          className="store-cart-link"
-          href="/cart"
-          aria-label={`Shopping bag, ${cartCount} items`}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="22"
-            height="22"
-            aria-hidden="true"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+        <div className="store-header-actions">
+          <CustomerAccountMenu />
+          <Link
+            className="store-cart-link"
+            href="/cart"
+            aria-label={`Shopping bag, ${cartCount} items`}
           >
-            <path d="M5 8h14l1 13H4L5 8Z" />
-            <path d="M9 9V6a3 3 0 0 1 6 0v3" />
-          </svg>
-          <span>Bag</span>
-          <span className="store-cart-count" aria-live="polite">
-            {cartCount}
-          </span>
-        </Link>
+            <svg
+              viewBox="0 0 24 24"
+              width="22"
+              height="22"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M5 8h14l1 13H4L5 8Z" />
+              <path d="M9 9V6a3 3 0 0 1 6 0v3" />
+            </svg>
+            <span>Bag</span>
+            <span className="store-cart-count" aria-live="polite">
+              {cartCount}
+            </span>
+          </Link>
+        </div>
       </header>
 
       {children}

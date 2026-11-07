@@ -1,107 +1,62 @@
-import { errors as joseErrors, SignJWT, jwtVerify } from "jose";
-import { cookies } from "next/headers";
-import { prisma } from "@/lib/prisma";
+import "server-only";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-const COOKIE_NAME = "fashion_freaks_admin_session";
+export type AppSession = {
+  id: string;
+  email: string;
+  displayName: string | null;
+  role: "ADMIN" | "CUSTOMER";
+};
 
-const SESSION_DURATION = 60 * 60 * 8; // 8 hours
+async function getAppSession(
+  expectedRole: AppSession["role"]
+): Promise<AppSession | null> {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
 
-function getSessionSecret() {
-  const secret = process.env.SESSION_SECRET;
+  if (error) {
+    if (
+      error.name === "AuthSessionMissingError" ||
+      (error.status !== undefined && error.status < 500 && error.status !== 429)
+    ) {
+      return null;
+    }
+    throw error;
+  }
+  if (!user || !user.email) return null;
 
-  if (!secret || secret.length < 32) {
-    throw new Error(
-      "SESSION_SECRET must be configured securely."
-    );
+  const supabaseAdmin = createSupabaseAdminClient();
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("UserProfile")
+    .select("id, email, displayName, role, isActive")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (profileError) throw profileError;
+  if (
+    !profile ||
+    !profile.isActive ||
+    profile.role !== expectedRole
+  ) {
+    return null;
   }
 
-  return new TextEncoder().encode(secret);
-}
-
-export async function createAdminSession(userId: string) {
-  const token = await new SignJWT({
-    role: "ADMIN",
-  })
-    .setProtectedHeader({ alg: "HS256" })
-    .setSubject(userId)
-    .setIssuedAt()
-    .setExpirationTime(`${SESSION_DURATION}s`)
-    .sign(getSessionSecret());
-
-  const cookieStore = await cookies();
-
-  cookieStore.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_DURATION,
-  });
+  return {
+    id: profile.id as string,
+    email: user.email,
+    displayName: profile.displayName as string | null,
+    role: expectedRole,
+  };
 }
 
 export async function getAdminSession() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(COOKIE_NAME)?.value;
-
-  if (!token) {
-    return null;
-  }
-
-  let payload;
-  try {
-    ({ payload } = await jwtVerify(
-      token,
-      getSessionSecret(),
-      {
-        algorithms: ["HS256"],
-      }
-    ));
-  } catch (error) {
-    if (error instanceof joseErrors.JOSEError) {
-      return null;
-    }
-
-    throw error;
-  }
-
-  if (
-    payload.role !== "ADMIN" ||
-    typeof payload.sub !== "string"
-  ) {
-    return null;
-  }
-
-  const user = await prisma.user.findUnique({
-    where: {
-      id: payload.sub,
-    },
-    select: {
-      id: true,
-      email: true,
-      role: true,
-      isActive: true,
-    },
-  });
-
-  if (
-    !user ||
-    !user.isActive ||
-    user.role !== "ADMIN"
-  ) {
-    return null;
-  }
-
-  return user;
+  return getAppSession("ADMIN");
 }
 
-export async function destroyAdminSession() {
-  const cookieStore = await cookies();
-
-  cookieStore.set(COOKIE_NAME, "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
-  });
+export async function getCustomerSession() {
+  return getAppSession("CUSTOMER");
 }

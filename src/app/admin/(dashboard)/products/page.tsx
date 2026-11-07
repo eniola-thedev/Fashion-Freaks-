@@ -1,10 +1,17 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { connection } from "next/server";
 import { getAdminSession } from "@/lib/auth";
 import ProductsClient from "./ProductsClient";
 
-export default async function AdminProductsPage() {
-  await connection();
+export default function AdminProductsPage() {
+  return (
+    <Suspense fallback={<p role="status">Loading products...</p>}>
+      <AdminProducts />
+    </Suspense>
+  );
+}
+
+async function AdminProducts() {
   const session = await getAdminSession();
 
   if (!session) {

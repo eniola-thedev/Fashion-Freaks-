@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import "./checkout.css"
 import {
   getCartReadySnapshot,
@@ -62,6 +63,7 @@ function money(amount: number) {
 }
 
 export default function CheckoutPage() {
+  const router = useRouter();
   const items = useSyncExternalStore(
     subscribeToCart,
     getCartSnapshot,
@@ -84,8 +86,49 @@ export default function CheckoutPage() {
   const [paying, setPaying] = useState(false);
   const [quoteResult, setQuoteResult] = useState<QuoteResult | null>(null);
   const [quoteAttempt, setQuoteAttempt] = useState(0);
+  const [accountReady, setAccountReady] = useState(false);
   const orderNumber = pendingOrder.orderNumber;
   const orderTotal = pendingOrder.total;
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function checkCustomerSession() {
+      try {
+        const response = await fetch("/api/customer/auth/session", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const result = (await response.json()) as {
+          authenticated?: boolean;
+          user?: { email?: unknown; displayName?: unknown };
+        };
+        if (!response.ok || !result.authenticated) {
+          router.replace("/account/login?next=%2Fcheckout");
+          return;
+        }
+
+        const email =
+          typeof result.user?.email === "string" ? result.user.email : "";
+        const displayName =
+          typeof result.user?.displayName === "string"
+            ? result.user.displayName
+            : "";
+        setDetails((current) => ({
+          ...current,
+          email,
+          fullName: current.fullName || displayName,
+        }));
+        setAccountReady(true);
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") return;
+        setMessage("Unable to check your account. Please try again.");
+      }
+    }
+
+    void checkCustomerSession();
+    return () => controller.abort();
+  }, [router]);
 
   async function handlePayment() {
     if (!orderNumber || paying) return;
@@ -343,6 +386,15 @@ async function handleSubmit(
     );
   }
 
+  if (!accountReady) {
+    return (
+      <main className="checkout-page">
+        <p role="status">Checking your account...</p>
+        {message && <p role="alert">{message}</p>}
+      </main>
+    );
+  }
+
   
 if (orderNumber) {
   return (
@@ -433,11 +485,12 @@ if (orderNumber) {
                 type="email"
                 autoComplete="email"
                 value={details.email}
-                onChange={(e) =>
-                  updateField("email", e.target.value)
-                }
-                placeholder="you@example.com"
+                readOnly
+                aria-describedby="checkout-account-email"
               />
+              <span id="checkout-account-email">
+                Signed in to your Fashion Freaks account.
+              </span>
             </label>
 
             <label className="checkout-field">

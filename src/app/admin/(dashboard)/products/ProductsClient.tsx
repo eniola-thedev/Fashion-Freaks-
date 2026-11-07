@@ -930,11 +930,6 @@ export default function ProductsClient() {
     0
   );
 
-  const lowStockVariants = products.flatMap((product) =>
-    product.variants.filter(
-      (variant) => variant.stock > 0 && variant.stock <= 5
-    )
-  ).length;
   const categoryOptions = [
     ...MAIN_PRODUCT_CATEGORIES,
     ...LEGACY_CATEGORIES,
@@ -1088,7 +1083,7 @@ export default function ProductsClient() {
 
         <nav className="admin-products-nav">
           <Link href="/admin">Dashboard</Link>
-          <span>Products & Inventory</span>
+          <span>Products & Variants</span>
         </nav>
       </header>
 
@@ -1100,7 +1095,8 @@ export default function ProductsClient() {
             </p>
             <h1>Products</h1>
             <p className="admin-products-subtitle">
-              Manage your catalogue, prices, sizes, colours and stock.
+              Manage your catalogue, prices and available size/colour options.
+              Enabled variants can be ordered regardless of recorded quantities.
             </p>
           </div>
 
@@ -1123,12 +1119,8 @@ export default function ProductsClient() {
             <strong>{activeCount}</strong>
           </article>
           <article>
-            <span>Units in stock</span>
+            <span>Units recorded</span>
             <strong>{totalUnits.toLocaleString("en-NG")}</strong>
-          </article>
-          <article>
-            <span>Low-stock variants</span>
-            <strong>{lowStockVariants}</strong>
           </article>
         </div>
 
@@ -1199,8 +1191,8 @@ export default function ProductsClient() {
               </label>
 
               <div className="wide admin-form-section-title">
-                <h3>Sizes, colours and inventory</h3>
-                <p>Set stock independently for every size and colour combination.</p>
+                <h3>Sizes and colours</h3>
+                <p>Enable the options customers can order. Recorded quantities are informational and do not limit orders.</p>
               </div>
               <div className="wide admin-variant-builder">
                 <fieldset className="admin-variant-choice">
@@ -1465,7 +1457,7 @@ export default function ProductsClient() {
                 {variantSizes.length > 0 && variantColours.length > 0 ? (
                   <div className="admin-variant-table-wrap">
                     <table className="admin-variant-stock-table">
-                      <caption>Stock quantity by size and colour</caption>
+                      <caption>Recorded quantity by size and colour (not enforced)</caption>
                       <thead>
                         <tr>
                           <th scope="col">Size</th>
@@ -1495,7 +1487,7 @@ export default function ProductsClient() {
                                       }
                                     />
                                     <span>
-                                      {enabled ? "Available" : "Not configured"}
+                                      {enabled ? "Enabled" : "Not configured"}
                                     </span>
                                   </label>
                                   <input
@@ -1722,7 +1714,7 @@ export default function ProductsClient() {
               <p>
                 Product: <strong>{variantProduct.name}</strong>.
                 Saving an existing colour/size combination replaces its
-                stock quantity with the value entered below.
+                recorded quantity. Quantities do not limit customer orders.
               </p>
             </div>
 
@@ -1775,7 +1767,7 @@ export default function ProductsClient() {
               </label>
 
               <label>
-                Available stock *
+                Recorded quantity *
                 <input
                   required
                   type="number"
@@ -1847,7 +1839,7 @@ export default function ProductsClient() {
                   <th>Product</th>
                   <th>Price</th>
                   <th>Variants</th>
-                  <th>Stock</th>
+                  <th>Recorded units</th>
                   <th>Status</th>
                   <th>Manage</th>
                 </tr>
@@ -1919,14 +1911,8 @@ export default function ProductsClient() {
                       </td>
 
                       <td>
-                        <span
-                          className={
-                            stock === 0
-                              ? "stock-badge out"
-                              : "stock-badge"
-                          }
-                        >
-                          {stock} units
+                        <span className="stock-badge">
+                          {stock} recorded
                         </span>
                       </td>
 
@@ -1957,7 +1943,7 @@ export default function ProductsClient() {
                             className="admin-product-toggle"
                             onClick={() => startVariant(product)}
                           >
-                            Stock / sizes
+                            Variant options
                           </button>
 
                           <button

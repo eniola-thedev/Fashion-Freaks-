@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAdminSession } from "@/lib/auth";
 import { colourHexFromName } from "@/lib/product-colours.mjs";
 
@@ -56,69 +56,24 @@ export async function POST(
       );
     }
 
-    const product = await prisma.product.findUnique({
-      where: { id: productId },
-      select: { id: true },
-    });
-
-    if (!product) {
+    const supabase = createSupabaseAdminClient();
+    const { data: variant, error } = await supabase.rpc(
+      "admin_upsert_variant",
+      {
+        p_product_id: productId,
+        p_colour: colour,
+        p_size: size,
+        p_stock: stock,
+        p_hex_color: colourHexFromName(colour),
+      }
+    );
+    if (error?.code === "P0002") {
       return NextResponse.json(
         { error: "Product not found." },
         { status: 404 }
       );
     }
-
-    // A repeated colour/size combination updates its stock
-    // instead of creating a duplicate variant.
-    const variant = await prisma.$transaction(async (tx) => {
-      const existingColour = await tx.productColour.findFirst({
-        where: {
-          productId,
-          name: { equals: colour, mode: "insensitive" },
-        },
-        select: { id: true, name: true },
-      });
-      if (!existingColour) {
-        const colourCount = await tx.productColour.count({
-          where: { productId },
-        });
-        await tx.productColour.create({
-          data: {
-            productId,
-            name: colour,
-            hexColor: colourHexFromName(colour),
-            sortOrder: colourCount,
-          },
-        });
-      }
-
-      const savedColourName = existingColour?.name ?? colour;
-      const existingVariant = await tx.productVariant.findFirst({
-        where: {
-          productId,
-          colour: { equals: savedColourName, mode: "insensitive" },
-          size: { equals: size, mode: "insensitive" },
-        },
-        select: { id: true },
-      });
-
-      if (existingVariant) {
-        return tx.productVariant.update({
-          where: { id: existingVariant.id },
-          data: { stock, isActive: true },
-        });
-      }
-
-      return tx.productVariant.create({
-        data: {
-          productId,
-          colour: savedColourName,
-          size,
-          stock,
-          isActive: true,
-        },
-      });
-    });
+    if (error) throw error;
 
     return NextResponse.json(
       { variant },

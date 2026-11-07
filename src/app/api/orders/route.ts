@@ -1,6 +1,7 @@
 
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getCustomerSession } from "@/lib/auth";
 import {
   requestShipbubbleQuote,
   isShippingRateLimited,
@@ -44,12 +45,12 @@ function clean(value: unknown, maxLength: number): string {
 
 function isUniqueConstraintError(
   error: unknown
-): error is { code: "P2002" } {
+): error is { code: string } {
   return (
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    error.code === "P2002"
+    error.code === "23505"
   );
 }
 
@@ -60,7 +61,7 @@ function orderResponse(
     total: number;
     deliveryFee: number;
     paymentStatus: string;
-    createdAt: Date;
+    createdAt: Date | string;
   },
   status: number
 ) {
@@ -82,8 +83,20 @@ function orderResponse(
 
 export async function POST(request: Request) {
   let checkoutKey = "";
+  let customerId: string | null = null;
+  let supabase: ReturnType<typeof createSupabaseAdminClient> | null = null;
 
   try {
+    const customerSession = await getCustomerSession();
+    if (!customerSession) {
+      return NextResponse.json(
+        { error: "Sign in to your account before placing an order." },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+    customerId = customerSession.id;
+    supabase = createSupabaseAdminClient();
+
     let body: OrderRequest;
     try {
       body = (await request.json()) as OrderRequest;
@@ -96,19 +109,20 @@ export async function POST(request: Request) {
       throw new OrderError("Your checkout session is invalid. Please try again.");
     }
 
-    const existingOrder = await prisma.order.findUnique({
-      where: { checkoutKey },
-      select: {
-        id: true,
-        orderNumber: true,
-        total: true,
-        deliveryFee: true,
-        paymentStatus: true,
-        createdAt: true,
-      },
-    });
+    const { data: existingOrder, error: existingOrderError } = await supabase
+      .from("Order")
+      .select("id, orderNumber, total, deliveryFee, paymentStatus, createdAt, customerId")
+      .eq("checkoutKey", checkoutKey)
+      .maybeSingle();
+    if (existingOrderError) throw existingOrderError;
 
     if (existingOrder) {
+      if (existingOrder.customerId !== customerSession.id) {
+        return NextResponse.json(
+          { error: "This checkout session is no longer available." },
+          { status: 409 }
+        );
+      }
       return orderResponse(existingOrder, 200);
     }
     if (isShippingRateLimited(request)) {
@@ -122,7 +136,7 @@ export async function POST(request: Request) {
     const items = body.items;
 
     const fullName = clean(customer?.fullName, 120);
-    const email = clean(customer?.email, 254).toLowerCase();
+    const email = customerSession.email;
     const phone = clean(customer?.phone, 25);
     const state = clean(customer?.state, 80);
     const city = clean(customer?.city, 100);
@@ -196,11 +210,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const quoteVariants = await prisma.productVariant.findMany({
-      where: { id: { in: [...quantities.keys()] } },
-      include: { product: true },
-    });
-    if (quoteVariants.length !== quantities.size) {
+    const { data: quoteVariants, error: quoteVariantsError } = await supabase
+      .from("ProductVariant")
+      .select(
+        "id, productId, colour, size, isActive, product:Product!inner(id, name, price, discountPrice, isActive)"
+      )
+      .in("id", [...quantities.keys()]);
+    if (quoteVariantsError) throw quoteVariantsError;
+    const availableVariants = quoteVariants ?? [];
+    if (availableVariants.length !== quantities.size) {
       throw new OrderError(
         "A product in your bag is no longer available.",
         409
@@ -209,7 +227,7 @@ export async function POST(request: Request) {
 
     const quoteItems: ShippingQuoteItem[] = [];
     for (const [variantId, item] of quantities) {
-      const variant = quoteVariants.find(
+      const variant = availableVariants.find(
         (candidate) =>
           candidate.id === variantId &&
           candidate.productId === item.productId
@@ -217,11 +235,10 @@ export async function POST(request: Request) {
       if (
         !variant ||
         !variant.isActive ||
-        !variant.product.isActive ||
-        variant.stock < item.quantity
+        !variant.product.isActive
       ) {
         throw new OrderError(
-          "A product in your bag is no longer available in the requested quantity.",
+          "A product in your bag is no longer available.",
           409
         );
       }
@@ -255,127 +272,46 @@ export async function POST(request: Request) {
       );
     }
 
-    const paymentExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
-    const order = await prisma.$transaction(async (tx) => {
-      const orderItems: {
-        productId: string;
-        variantId: string;
-        productName: string;
-        colour: string;
-        size: string;
-        unitPrice: number;
-        quantity: number;
-        lineTotal: number;
-      }[] = [];
-
-      let subtotal = 0;
-
-      for (const [variantId, item] of quantities) {
-        const product = await tx.product.findFirst({
-          where: {
-            id: item.productId,
-            isActive: true,
-          },
-        });
-
-        if (!product) {
-          throw new OrderError(
-            "A product in your bag is no longer available.",
-            409
-          );
-        }
-
-        const variant = await tx.productVariant.findFirst({
-          where: {
-            id: variantId,
-            productId: item.productId,
-          },
-        });
-
-        if (!variant) {
-          throw new OrderError(
-            "A selected option does not belong to its product.",
-            409
-          );
-        }
-
-        // Reserve stock atomically. If stock is insufficient,
-        // the transaction fails and all changes are rolled back.
-        const reservation = await tx.productVariant.updateMany({
-          where: {
-            id: variantId,
-            productId: item.productId,
-            isActive: true,
-            stock: { gte: item.quantity },
-          },
-          data: {
-            stock: { decrement: item.quantity },
-          },
-        });
-
-        if (reservation.count !== 1) {
-          throw new OrderError(
-            `${product.name} (${variant.colour}, ${variant.size}) does not have enough stock. Please update your bag.`,
-            409
-          );
-        }
-
-        const unitPrice = product.discountPrice ?? product.price;
-        const lineTotal = unitPrice * item.quantity;
-        subtotal += lineTotal;
-
-        orderItems.push({
-          productId: product.id,
-          variantId: variant.id,
-          productName: product.name,
-          colour: variant.colour,
-          size: variant.size,
-          unitPrice,
+    const { data: order, error: createOrderError } = await supabase.rpc(
+      "create_store_order",
+      {
+        p_checkout_key: checkoutKey,
+        p_customer_id: customerSession.id,
+        p_customer_name: fullName,
+        p_customer_email: email,
+        p_customer_phone: phone,
+        p_delivery_state: state,
+        p_delivery_city: city,
+        p_delivery_address: address,
+        p_delivery_notes: deliveryNotes,
+        p_delivery_fee: deliveryQuote.deliveryFee,
+        p_items: [...quantities].map(([variantId, item]) => ({
+          productId: item.productId,
+          variantId,
           quantity: item.quantity,
-          lineTotal,
-        });
+        })),
+        p_payment_expires_at: new Date(
+          Date.now() + 30 * 60 * 1000
+        ).toISOString(),
       }
-
-      const total = subtotal + deliveryQuote.deliveryFee;
-      if (!Number.isSafeInteger(total) || total > 2_147_483_647) {
+    );
+    if (createOrderError) {
+      if (createOrderError.code === "P0001") {
         throw new OrderError(
-          "The order total is too large to process. Please contact the store.",
-          400
+          "A product in your bag is no longer available.",
+          409
         );
       }
+      if (createOrderError.code === "22023") {
+        throw new OrderError("Please check your order details.");
+      }
+      throw createOrderError;
+    }
 
-      return tx.order.create({
-        data: {
-          checkoutKey,
-          customerName: fullName,
-          customerEmail: email,
-          customerPhone: phone,
-          deliveryState: state,
-          deliveryCity: city,
-          deliveryAddress: address,
-          deliveryNotes,
-          subtotal,
-          deliveryFee: deliveryQuote.deliveryFee,
-          total,
-          orderStatus: "PENDING",
-          paymentStatus: "PENDING",
-          paymentExpiresAt,
-          items: {
-            create: orderItems,
-          },
-        },
-        select: {
-          id: true,
-          orderNumber: true,
-          total: true,
-          deliveryFee: true,
-          paymentStatus: true,
-          createdAt: true,
-        },
-      });
-    });
-
-    return orderResponse(order, 201);
+    if (!order || typeof order !== "object") {
+      throw new Error("Supabase did not return the created order.");
+    }
+    return orderResponse(order as Parameters<typeof orderResponse>[0], 201);
   } catch (error) {
     if (error instanceof OrderError) {
       return NextResponse.json(
@@ -391,20 +327,15 @@ export async function POST(request: Request) {
       );
     }
 
-    if (checkoutKey && isUniqueConstraintError(error)) {
-      const existingOrder = await prisma.order.findUnique({
-        where: { checkoutKey },
-        select: {
-          id: true,
-          orderNumber: true,
-          total: true,
-          deliveryFee: true,
-          paymentStatus: true,
-          createdAt: true,
-        },
-      });
+    if (supabase && checkoutKey && isUniqueConstraintError(error)) {
+      const { data: existingOrder, error: existingOrderError } = await supabase
+        .from("Order")
+        .select("id, orderNumber, total, deliveryFee, paymentStatus, createdAt, customerId")
+        .eq("checkoutKey", checkoutKey)
+        .maybeSingle();
+      if (existingOrderError) throw existingOrderError;
 
-      if (existingOrder) {
+      if (existingOrder && existingOrder.customerId === customerId) {
         return orderResponse(existingOrder, 200);
       }
     }

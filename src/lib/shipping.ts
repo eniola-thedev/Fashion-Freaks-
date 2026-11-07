@@ -140,7 +140,9 @@ async function postToShipbubble(
     });
     throw new ShippingQuoteError(
       response.status === 422
-        ? "The delivery service could not validate this address or route."
+        ? path === "/shipping/address/validate"
+          ? "Shipbubble couldn't verify the delivery details. Check the recipient details and enter a specific street address, city, and state."
+          : "Shipbubble couldn't find a delivery route for this address. Check the destination and the store's pickup address."
         : response.status === 429
           ? "The delivery service is busy. Please try again in a moment."
           : "The delivery service could not provide a quote right now.",

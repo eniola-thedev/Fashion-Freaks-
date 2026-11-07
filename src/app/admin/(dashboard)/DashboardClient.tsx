@@ -22,16 +22,6 @@ type TopProduct = {
   revenue: number;
 };
 
-type LowStockVariant = {
-  id: string;
-  productId: string;
-  productName: string;
-  slug: string;
-  colour: string;
-  size: string;
-  stock: number;
-};
-
 type RecentOrder = {
   id: string;
   orderNumber: string;
@@ -46,7 +36,6 @@ type RecentOrder = {
 type Analytics = {
   stats: Stats;
   topProducts: TopProduct[];
-  lowStockVariants: LowStockVariant[];
   recentOrders: RecentOrder[];
 };
 
@@ -79,7 +68,6 @@ export default function DashboardClient() {
   const [data, setData] = useState<Analytics>({
     stats: initialStats,
     topProducts: [],
-    lowStockVariants: [],
     recentOrders: [],
   });
 
@@ -259,52 +247,6 @@ export default function DashboardClient() {
           )}
         </section>
 
-        <section className="ff-dashboard-panel">
-          <div className="ff-dashboard-panel-heading">
-            <div>
-              <h2>Low-stock alerts</h2>
-              <p>Active variants with five units or fewer.</p>
-            </div>
-
-            <Link href="/admin/products">Manage stock</Link>
-          </div>
-
-          {loading ? (
-            <p className="ff-dashboard-empty">Checking stock...</p>
-          ) : data.lowStockVariants.length === 0 ? (
-            <p className="ff-dashboard-empty">
-              No active product variants meet the low-stock threshold.
-            </p>
-          ) : (
-            <div className="ff-dashboard-list">
-              {data.lowStockVariants.slice(0, 8).map((variant) => (
-                <div
-                  className="ff-dashboard-stock-row"
-                  key={variant.id}
-                >
-                  <div>
-                    <strong>{variant.productName}</strong>
-                    <p>
-                      {variant.colour} / {variant.size}
-                    </p>
-                  </div>
-
-                  <span
-                    className={
-                      variant.stock === 0
-                        ? "ff-stock-empty"
-                        : "ff-stock-low"
-                    }
-                  >
-                    {variant.stock === 0
-                      ? "Out of stock"
-                      : `${variant.stock} left`}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
       </div>
 
       <section className="ff-dashboard-panel ff-dashboard-recent">

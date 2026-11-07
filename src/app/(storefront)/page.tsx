@@ -22,7 +22,7 @@ type Product = {
   colour: string;
   image: string;
   slug: string;
-  stock: number;
+  available: boolean;
 };
 
 type DatabaseProduct = {
@@ -44,7 +44,6 @@ type DatabaseProduct = {
   }[];
   slug: string;
   variants: {
-    stock: number;
     colour: string;
     imageUrl: string | null;
   }[];
@@ -68,6 +67,7 @@ export default function Home() {
   const [sort, setSort] = useState("latest");
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [productError, setProductError] = useState("");
+  const [productLoadAttempt, setProductLoadAttempt] = useState(0);
   const [unavailableColourImages, setUnavailableColourImages] =
     useState<Set<string>>(() => new Set());
 
@@ -75,16 +75,30 @@ export default function Home() {
     const controller = new AbortController();
 
     async function loadProducts() {
+      setLoadingProducts(true);
+      setProductError("");
       try {
         const response = await fetch("/api/products", {
+          cache: "no-store",
           signal: controller.signal,
         });
+        const data: unknown = await response.json();
         if (!response.ok) {
-          throw new Error("Could not load products.");
+          const errorMessage =
+            typeof data === "object" &&
+            data !== null &&
+            "error" in data &&
+            typeof data.error === "string"
+              ? data.error
+              : "Could not load products.";
+          throw new Error(errorMessage);
         }
 
-        const data: DatabaseProduct[] = await response.json();
-        setProducts(data.map((product) => {
+        if (!Array.isArray(data)) {
+          throw new Error("The product service returned an invalid response.");
+        }
+
+        setProducts((data as DatabaseProduct[]).map((product) => {
           const colours = product.colours.length > 0
             ? product.colours.map((colour) => ({
                 name: colour.name,
@@ -140,10 +154,7 @@ export default function Home() {
               "Colour not specified",
             image: mainImage,
             slug: product.slug,
-            stock: product.variants.reduce(
-              (total, variant) => total + variant.stock,
-              0
-            ),
+            available: product.variants.length > 0,
           };
         }));
       } catch (error) {
@@ -160,7 +171,7 @@ export default function Home() {
     loadProducts();
 
     return () => controller.abort();
-  }, []);
+  }, [productLoadAttempt]);
 
   const categoryOptions = useMemo(() => {
     const categoryNames = new Map<string, string>();
@@ -328,7 +339,7 @@ export default function Home() {
         <div className="section-heading product-heading">
           <div>
             <span className="eyebrow">CURATED FOR YOUR ROTATION</span>
-              <h2>Shop the collection<span className="accent-dot">.</span></h2>
+            <h2>Shop the collection<span className="accent-dot">.</span></h2>
           </div>
           <span className="product-total">
             {visibleProducts.length.toString().padStart(2, "0")} PIECES
@@ -376,7 +387,16 @@ export default function Home() {
   {loadingProducts ? (
     <p>Loading the collection...</p>
   ) : productError ? (
-    <p role="alert">{productError}</p>
+    <div className="product-load-error" role="alert">
+      <p>{productError}</p>
+      <button
+        type="button"
+        className="button button-dark"
+        onClick={() => setProductLoadAttempt((attempt) => attempt + 1)}
+      >
+        Try again
+      </button>
+    </div>
   ) : visibleProducts.length === 0 ? (
     <p className="product-empty">
       {products.length === 0
@@ -450,8 +470,8 @@ export default function Home() {
                 ))}
               </div>
             )}
-            <p className={product.stock > 0 ? "product-stock" : "product-stock out"}>
-              {product.stock > 0 ? "In stock" : "Currently unavailable"}
+            <p className={product.available ? "product-stock" : "product-stock out"}>
+              {product.available ? "Available" : "Currently unavailable"}
             </p>
           </div>
           <span className="product-price">

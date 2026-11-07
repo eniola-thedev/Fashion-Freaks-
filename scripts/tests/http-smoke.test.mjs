@@ -11,6 +11,30 @@ async function request(path, options = {}) {
   });
 }
 
+test("public product catalogue is reachable and returns a product array", async () => {
+  const response = await request("/api/products");
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+
+  const products = await response.json();
+  assert.ok(Array.isArray(products), "Product API must return an array.");
+  for (const product of products) {
+    assert.equal(typeof product.id, "string");
+    assert.equal(typeof product.name, "string");
+    assert.equal(typeof product.slug, "string");
+    assert.equal(typeof product.price, "number");
+  }
+});
+
+test("database health check reports connection and catalog state", async () => {
+  const response = await request("/api/health");
+  assert.equal(response.status, 200);
+  const health = await response.json();
+  assert.equal(health.database, "connected");
+  assert.ok(["ready", "empty"].includes(health.catalogue));
+  assert.equal(typeof health.activeProducts, "number");
+});
+
 test("admin pages redirect unauthenticated visitors to login", async () => {
   for (const path of ["/admin", "/admin/products", "/admin/orders"]) {
     const response = await request(path);
@@ -45,13 +69,13 @@ test("admin APIs and image uploads reject unauthenticated requests", async () =>
   assert.equal(uploadResponse.status, 401);
 });
 
-test("invalid checkout and payment requests are rejected without writes", async () => {
+test("unauthenticated checkout and invalid payment requests are rejected without writes", async () => {
   const orderResponse = await request("/api/orders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
   });
-  assert.equal(orderResponse.status, 400);
+  assert.equal(orderResponse.status, 401);
 
   const initializeResponse = await request("/api/payments/initialize", {
     method: "POST",

@@ -48,14 +48,16 @@ export function isProductCloudinaryAsset(
   }
 
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-  if (!cloudName) return false;
 
   try {
     const url = new URL(imageUrl);
+    const pathSegments = url.pathname.split("/");
     return (
       url.protocol === "https:" &&
       url.hostname === "res.cloudinary.com" &&
-      url.pathname.startsWith(`/${cloudName}/image/upload/`) &&
+      pathSegments[1] !== "" &&
+      (!cloudName || pathSegments[1] === cloudName) &&
+      url.pathname.includes("/image/upload/") &&
       url.pathname.includes(`/${publicId}.`)
     );
   } catch {

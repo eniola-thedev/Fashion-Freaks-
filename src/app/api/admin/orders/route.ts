@@ -1,6 +1,6 @@
 
 import { connection, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAdminSession } from "@/lib/auth";
 
 export async function GET() {
@@ -16,42 +16,34 @@ export async function GET() {
       );
     }
 
-    const orders = await prisma.order.findMany({
-      orderBy: { createdAt: "desc" },
-      include: {
-        items: {
-          select: {
-            id: true,
-            productId: true,
-            productName: true,
-            colour: true,
-            size: true,
-            unitPrice: true,
-            quantity: true,
-            lineTotal: true,
-          },
-        },
-      },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: orders, error } = await supabase
+      .from("Order")
+      .select(
+        "*, items:OrderItem(id, productId, productName, colour, size, unitPrice, quantity, lineTotal)"
+      )
+      .order("createdAt", { ascending: false });
+    if (error) throw error;
+    const orderRows = orders ?? [];
 
     const stats = {
-      totalOrders: orders.length,
-      pendingPayment: orders.filter(
+      totalOrders: orderRows.length,
+      pendingPayment: orderRows.filter(
         (order) => order.paymentStatus === "PENDING"
       ).length,
-      paidOrders: orders.filter(
+      paidOrders: orderRows.filter(
         (order) => order.paymentStatus === "PAID"
       ).length,
-      processingOrders: orders.filter(
+      processingOrders: orderRows.filter(
         (order) => order.orderStatus === "PROCESSING"
       ).length,
-      shippedOrders: orders.filter(
+      shippedOrders: orderRows.filter(
         (order) => order.orderStatus === "SHIPPED"
       ).length,
-      deliveredOrders: orders.filter(
+      deliveredOrders: orderRows.filter(
         (order) => order.orderStatus === "DELIVERED"
       ).length,
-      paidRevenue: orders
+      paidRevenue: orderRows
         .filter((order) => order.paymentStatus === "PAID")
         .reduce((sum, order) => sum + order.total, 0),
     };

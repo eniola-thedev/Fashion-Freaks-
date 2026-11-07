@@ -21,7 +21,6 @@ type Variant = {
   id: string;
   colour: string;
   size: string;
-  stock: number;
   imageUrl: string | null;
 };
 
@@ -252,13 +251,13 @@ export default function ProductDetails({
       return false;
     }
 
-    if (!selectedVariant || selectedVariant.stock <= 0) {
-      setMessage("Sorry, this colour and size are out of stock.");
+    if (!selectedVariant) {
+      setMessage("Sorry, this colour and size are no longer available.");
       return false;
     }
 
-    if (quantity > Math.min(selectedVariant.stock, 10)) {
-      setMessage("That quantity exceeds the available stock for this option.");
+    if (quantity > 10) {
+      setMessage("You can add up to 10 of this option at a time.");
       return false;
     }
 
@@ -270,11 +269,8 @@ export default function ProductDetails({
       );
 
       if (existingItem) {
-        if (
-          existingItem.quantity + quantity >
-          Math.min(selectedVariant.stock, 10)
-        ) {
-          setMessage("That quantity exceeds the available stock for this option.");
+        if (existingItem.quantity + quantity > 10) {
+          setMessage("You can add up to 10 of this option at a time.");
           return false;
         }
 
@@ -430,11 +426,11 @@ export default function ProductDetails({
             {colours.length > 0 ? (
               <div className="detail-colours" ref={colourSelectorRef}>
                 {colours.map((colour) => {
-                  const colorStock = product.variants
+                  const hasAvailableVariant = product.variants
                     .filter((variant) =>
                       sameColour(variant.colour, colour.name)
                     )
-                    .reduce((total, variant) => total + variant.stock, 0);
+                    .length > 0;
                   const thumbnail =
                     colour.images.find(
                       (item) =>
@@ -480,8 +476,8 @@ export default function ProductDetails({
                         }
                       }}
                       aria-pressed={selectedColour === colour.name}
-                      aria-label={`${colour.name}${colorStock === 0 ? ", out of stock" : ""}`}
-                      title={`${colour.name}${colorStock === 0 ? " · Out of stock" : ""}`}
+                      aria-label={`${colour.name}${hasAvailableVariant ? "" : ", unavailable"}`}
+                      title={`${colour.name}${hasAvailableVariant ? "" : " · Unavailable"}`}
                     >
                       <span
                         className="detail-colour-swatch"
@@ -506,9 +502,9 @@ export default function ProductDetails({
                         )}
                       </span>
                       <span className="detail-colour-label">{colour.name}</span>
-                      {colorStock === 0 && (
+                      {!hasAvailableVariant && (
                         <span className="detail-colour-unavailable">
-                          Sold out
+                          Unavailable
                         </span>
                       )}
                     </button>
@@ -519,7 +515,7 @@ export default function ProductDetails({
               <p>
                 {product.variants.length === 0
                   ? "Contact us to confirm available options."
-                  : "Currently out of stock."}
+                  : "Choose an available colour."}
               </p>
             )}
           </div>
@@ -545,14 +541,14 @@ export default function ProductDetails({
                     className={`detail-size-button ${
                       selectedSize === size ? "selected" : ""
                     }`}
-                    disabled={!variant || variant.stock <= 0}
+                    disabled={!variant}
                     onClick={() => {
                       setSelectedSize(size);
                       setQuantity(1);
                       setMessage("");
                     }}
                     aria-pressed={selectedSize === size}
-                    title={variant?.stock ? size : `${size} unavailable`}
+                    title={variant ? size : `${size} unavailable`}
                   >
                     {size}
                   </button>
@@ -564,14 +560,14 @@ export default function ProductDetails({
               {product.variants.length === 0
                 ? "Online checkout is unavailable for this product. Contact us for availability."
                 : colours.length === 0
-                  ? "Currently out of stock."
+                ? "Choose an available colour."
                   : !selectedColour
                     ? "Select a colour first."
                     : !selectedSize
                   ? "Select a size."
-                      : selectedVariant && selectedVariant.stock > 0
-                    ? "In stock"
-                        : "Out of stock"}
+                      : selectedVariant
+                    ? "Available"
+                    : "Choose an available size"}
             </p>
           </div>
 
@@ -609,8 +605,7 @@ export default function ProductDetails({
             onClick={addToBag}
             disabled={
               product.variants.length === 0 ||
-              !selectedVariant ||
-              selectedVariant.stock <= 0
+              !selectedVariant
             }
           >
             {product.variants.length === 0
@@ -626,7 +621,7 @@ export default function ProductDetails({
                 onClick={() => {
                   if (addToBag()) router.push("/checkout");
                 }}
-                disabled={!selectedVariant || selectedVariant.stock <= 0}
+                disabled={!selectedVariant}
               >
                 BUY NOW
               </button>

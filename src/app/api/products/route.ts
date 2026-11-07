@@ -1,62 +1,31 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export async function GET() {
   try {
-    const products = await prisma.product.findMany({
-      where: {
-        isActive: true,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        description: true,
-        price: true,
-        category: true,
-        colour: true,
-        imageUrl: true,
-        discountPrice: true,
-        isFeatured: true,
-        colours: {
-          select: {
-            id: true,
-            name: true,
-            hexColor: true,
-            images: {
-              select: {
-                imageUrl: true,
-                position: true,
-                isPrimary: true,
-              },
-              orderBy: { position: "asc" },
-            },
-          },
-          orderBy: { sortOrder: "asc" },
-        },
-        variants: {
-          where: { isActive: true },
-          select: {
-            id: true,
-            colour: true,
-            size: true,
-            stock: true,
-            imageUrl: true,
-          },
-        },
-      },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: products, error } = await supabase
+      .from("Product")
+      .select(
+        "id, name, slug, description, price, category, colour, imageUrl, discountPrice, isFeatured, colours:ProductColour(id, name, hexColor, images:ProductColourImage(imageUrl, position, isPrimary)), variants:ProductVariant(id, colour, size, imageUrl)"
+      )
+      .eq("isActive", true)
+      .eq("variants.isActive", true)
+      .order("createdAt", { ascending: false });
+    if (error) throw error;
 
-    return NextResponse.json(products);
+    return NextResponse.json(products, {
+      headers: { "Cache-Control": "no-store, max-age=0" },
+    });
   } catch (error) {
     console.error("Failed to fetch products:", error);
 
     return NextResponse.json(
-      { error: "Unable to fetch products" },
-      { status: 500 }
+      { error: "The product catalogue is temporarily unavailable. Please try again." },
+      {
+        status: 503,
+        headers: { "Cache-Control": "no-store, max-age=0" },
+      }
     );
   }
 }

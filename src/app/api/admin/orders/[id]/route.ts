@@ -1,6 +1,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAdminSession } from "@/lib/auth";
 
 const allowedStatuses = [
@@ -39,14 +39,13 @@ export async function PATCH(
       );
     }
 
-    const order = await prisma.order.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        paymentStatus: true,
-        orderStatus: true,
-      },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: order, error: orderError } = await supabase
+      .from("Order")
+      .select("id, paymentStatus, orderStatus")
+      .eq("id", id)
+      .maybeSingle();
+    if (orderError) throw orderError;
 
     if (!order) {
       return NextResponse.json(
@@ -92,17 +91,14 @@ export async function PATCH(
       );
     }
 
-    const updatedOrder = await prisma.order.update({
-      where: { id },
-      data: { orderStatus: status },
-      select: {
-        id: true,
-        orderNumber: true,
-        orderStatus: true,
-        paymentStatus: true,
-        updatedAt: true,
-      },
-    });
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from("Order")
+      .update({ orderStatus: status })
+      .eq("id", id)
+      .eq("paymentStatus", "PAID")
+      .select("id, orderNumber, orderStatus, paymentStatus, updatedAt")
+      .single();
+    if (updateError) throw updateError;
 
     return NextResponse.json({
       message: "Order status updated successfully.",

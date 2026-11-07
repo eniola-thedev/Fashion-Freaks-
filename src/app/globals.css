@@ -58,7 +58,8 @@ a {
 
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+summary:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 4px;
 }
@@ -1790,6 +1791,118 @@ input:focus-visible {
   text-underline-offset: 4px;
 }
 
+.store-header-actions {
+  justify-self: end;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 2vw, 18px);
+}
+
+.store-account-link,
+.store-account-trigger {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.store-account-link {
+  min-width: 44px;
+  padding-inline: 8px;
+  white-space: nowrap;
+}
+
+.store-account-menu {
+  position: relative;
+}
+
+.store-account-trigger {
+  cursor: pointer;
+  list-style: none;
+}
+
+.store-account-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.store-account-trigger::marker {
+  content: "";
+}
+
+.store-account-trigger svg,
+.store-account-link svg {
+  flex: none;
+}
+
+.store-account-greeting {
+  max-width: 20vw;
+  overflow-wrap: anywhere;
+}
+
+.store-account-menu[open] > .store-account-trigger,
+.store-account-trigger:hover,
+.store-account-link:hover {
+  color: #ff6a84;
+}
+
+.store-account-dropdown {
+  position: absolute;
+  z-index: 20;
+  inset-block-start: calc(100% + 10px);
+  inset-inline-end: 0;
+  width: min(280px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+
+.store-account-dropdown-name {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.store-account-dropdown a,
+.store-account-dropdown button {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.store-account-dropdown a:hover,
+.store-account-dropdown button:hover:not(:disabled) {
+  background: var(--paper);
+}
+
+.store-account-dropdown button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.store-account-error {
+  margin: 0;
+  color: #8c3131;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .store-cart-link {
   justify-self: end;
   display: inline-flex;
@@ -2206,7 +2319,7 @@ input:focus-visible {
 
 @media (max-width: 650px) {
   .store-header {
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 12px;
     min-height: 68px;
     padding: 6px 16px;
@@ -2235,6 +2348,19 @@ input:focus-visible {
   .store-cart-link svg,
   .store-cart-count {
     flex-shrink: 0;
+  }
+
+  .store-header-actions {
+    gap: 6px;
+  }
+
+  .store-account-trigger {
+    gap: 4px;
+    font-size: 11px;
+  }
+
+  .store-account-greeting {
+    max-width: 18vw;
   }
 
   .store-footer {
@@ -2273,6 +2399,12 @@ input:focus-visible {
   .product-view-label {
     opacity: 1;
     transform: none;
+  }
+}
+
+@media (max-width: 390px) {
+  .store-nav a:nth-child(n + 2) {
+    display: none;
   }
 }
 /* =========================================
@@ -2387,6 +2519,42 @@ input:focus-visible {
 
 .admin-login-form input:disabled {
   opacity: 0.65;
+}
+
+.password-input-wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.password-input-wrap input {
+  padding-right: 58px !important;
+}
+
+.password-visibility-toggle {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: #45423c;
+  cursor: pointer;
+}
+
+.password-visibility-toggle svg {
+  width: 21px;
+  height: 21px;
+}
+
+.password-visibility-toggle:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
 }
 
 .admin-login-button {
@@ -4924,4 +5092,11 @@ input:focus-visible {
   .detail-gallery-dot:nth-of-type(n + 9) {
     display: none;
   }
+}
+
+.product-load-error {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 20px 0;
 }

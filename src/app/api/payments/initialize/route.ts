@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { randomUUID } from "crypto";
+import { getCustomerSession } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
@@ -27,9 +28,22 @@ export async function POST(request: Request) {
       );
     }
 
-    const order = await prisma.order.findUnique({
-      where: { orderNumber },
-    });
+    const customer = await getCustomerSession();
+    if (!customer) {
+      return NextResponse.json(
+        { error: "Sign in to your account before paying for this order." },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    const supabase = createSupabaseAdminClient();
+    const { data: order, error: orderError } = await supabase
+      .from("Order")
+      .select("*")
+      .eq("orderNumber", orderNumber)
+      .eq("customerId", customer.id)
+      .maybeSingle();
+    if (orderError) throw orderError;
 
     if (!order) {
       return NextResponse.json(
@@ -70,7 +84,7 @@ export async function POST(request: Request) {
     if (
       order.paymentReference ||
       !order.paymentExpiresAt ||
-      order.paymentExpiresAt <= now
+      new Date(order.paymentExpiresAt) <= now
     ) {
       return NextResponse.json(
         {
@@ -82,19 +96,18 @@ export async function POST(request: Request) {
     }
 
     const reference = `FF-${randomUUID()}`;
-    const claim = await prisma.order.updateMany({
-      where: {
-        id: order.id,
-        paymentStatus: "PENDING",
-        paymentReference: null,
-        paymentExpiresAt: { gt: now },
-      },
-      data: {
-        paymentReference: reference,
-      },
-    });
+    const { data: claim, error: claimError } = await supabase
+      .from("Order")
+      .update({ paymentReference: reference })
+      .eq("id", order.id)
+      .eq("paymentStatus", "PENDING")
+      .is("paymentReference", null)
+      .gt("paymentExpiresAt", now.toISOString())
+      .select("id")
+      .maybeSingle();
+    if (claimError) throw claimError;
 
-    if (claim.count !== 1) {
+    if (!claim) {
       return NextResponse.json(
         {
           error:
@@ -138,14 +151,13 @@ export async function POST(request: Request) {
 
     if (!paystackResponse.ok || responseBody?.status !== true) {
       if (responseBody?.status === false) {
-        await prisma.order.updateMany({
-          where: {
-            id: order.id,
-            paymentStatus: "PENDING",
-            paymentReference: reference,
-          },
-          data: { paymentReference: null },
-        });
+        const { error: releaseError } = await supabase
+          .from("Order")
+          .update({ paymentReference: null })
+          .eq("id", order.id)
+          .eq("paymentStatus", "PENDING")
+          .eq("paymentReference", reference);
+        if (releaseError) throw releaseError;
       }
 
       console.error(

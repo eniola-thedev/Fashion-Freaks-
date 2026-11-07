@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   matchesPaystackTransaction,
   parsePaystackTransaction,
@@ -45,62 +45,29 @@ export async function GET(request: Request) {
   }
 
   try {
-    const expiredOrders = await prisma.order.findMany({
-      where: {
-        paymentStatus: "PENDING",
-        paymentExpiresAt: { lte: new Date() },
-      },
-      include: { items: true },
-      take: 100,
-      orderBy: { paymentExpiresAt: "asc" },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: expiredOrders, error: expiredOrdersError } = await supabase
+      .from("Order")
+      .select("*")
+      .eq("paymentStatus", "PENDING")
+      .lte("paymentExpiresAt", new Date().toISOString())
+      .order("paymentExpiresAt", { ascending: true })
+      .limit(100);
+    if (expiredOrdersError) throw expiredOrdersError;
 
     let paidConfirmed = 0;
     let failedConfirmed = 0;
     let needsReview = 0;
 
-    for (const order of expiredOrders) {
+    for (const order of expiredOrders ?? []) {
       const reference = order.paymentReference;
 
       if (!reference) {
-        const restored = await prisma.$transaction(async (tx) => {
-          const cancelled = await tx.order.updateMany({
-            where: {
-              id: order.id,
-              paymentStatus: "PENDING",
-              paymentReference: null,
-              paymentExpiresAt: { lte: new Date() },
-            },
-            data: {
-              paymentStatus: "FAILED",
-              orderStatus: "CANCELLED",
-            },
-          });
-
-          if (cancelled.count !== 1) {
-            return false;
-          }
-
-          for (const item of order.items) {
-            const stockUpdate = await tx.productVariant.updateMany({
-              where: {
-                id: item.variantId,
-                productId: item.productId,
-              },
-              data: {
-                stock: { increment: item.quantity },
-              },
-            });
-
-            if (stockUpdate.count !== 1) {
-              throw new Error(
-                `Could not restore stock for variant ${item.variantId}`
-              );
-            }
-          }
-
-          return true;
-        });
+        const { data: restored, error: restoreError } = await supabase.rpc(
+          "restore_expired_order",
+          { p_order_id: order.id, p_payment_reference: null }
+        );
+        if (restoreError) throw restoreError;
 
         if (restored) failedConfirmed++;
         continue;
@@ -141,81 +108,46 @@ export async function GET(request: Request) {
       }
 
       if (transaction.status === "success") {
-        const updated = await prisma.order.updateMany({
-          where: {
-            id: order.id,
-            paymentStatus: "PENDING",
-            paymentReference: reference,
-          },
-          data: {
-            paymentStatus: "PAID",
-            orderStatus: "PROCESSING",
-          },
-        });
+        const { data: updated, error: updateError } = await supabase
+          .from("Order")
+          .update({ paymentStatus: "PAID", orderStatus: "PROCESSING" })
+          .eq("id", order.id)
+          .eq("paymentStatus", "PENDING")
+          .eq("paymentReference", reference)
+          .select("id")
+          .maybeSingle();
+        if (updateError) throw updateError;
 
-        if (updated.count === 1) paidConfirmed++;
+        if (updated) paidConfirmed++;
         continue;
       }
 
-      // Do not restore stock for transactions that are merely
-      // pending, abandoned, unknown, or otherwise inconclusive.
+      // Do not cancel orders for transactions that are merely pending,
+      // abandoned, unknown, or otherwise inconclusive.
       if (transaction.status !== "failed") {
         needsReview++;
         continue;
       }
 
-      // Restore stock and cancel the order atomically.
-      const restored = await prisma.$transaction(async (tx) => {
-        const cancelled = await tx.order.updateMany({
-          where: {
-            id: order.id,
-            paymentStatus: "PENDING",
-            paymentReference: reference,
-            paymentExpiresAt: { lte: new Date() },
-          },
-          data: {
-            paymentStatus: "FAILED",
-            orderStatus: "CANCELLED",
-          },
-        });
-
-        if (cancelled.count !== 1) {
-          return false;
-        }
-
-        for (const item of order.items) {
-          const stockUpdate = await tx.productVariant.updateMany({
-            where: {
-              id: item.variantId,
-              productId: item.productId,
-            },
-            data: {
-              stock: { increment: item.quantity },
-            },
-          });
-
-          if (stockUpdate.count !== 1) {
-            throw new Error(
-              `Could not restore stock for variant ${item.variantId}`
-            );
-          }
-        }
-
-        return true;
-      });
+      // Cancel the expired order atomically.
+      const { data: restored, error: restoreError } = await supabase.rpc(
+        "restore_expired_order",
+        { p_order_id: order.id, p_payment_reference: reference }
+      );
+      if (restoreError) throw restoreError;
 
       if (restored) failedConfirmed++;
     }
 
     if (needsReview > 0) {
       console.warn(
-        "Expired payment reservations require manual review.",
+        "Expired orders require manual payment review.",
         { needsReview }
       );
     }
 
     return NextResponse.json({
-      checked: expiredOrders.length,
+      checked: expiredOrders?.length ?? 0,
       paidConfirmed,
       failedConfirmed,
       needsReview,

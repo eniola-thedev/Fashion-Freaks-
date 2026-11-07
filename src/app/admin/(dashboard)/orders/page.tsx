@@ -1,10 +1,17 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { connection } from "next/server";
 import { getAdminSession } from "@/lib/auth";
 import OrdersClient from "./OrdersClient";
 
-export default async function AdminOrdersPage() {
-  await connection();
+export default function AdminOrdersPage() {
+  return (
+    <Suspense fallback={<p role="status">Loading orders...</p>}>
+      <AdminOrders />
+    </Suspense>
+  );
+}
+
+async function AdminOrders() {
   const session = await getAdminSession();
 
   if (!session) {

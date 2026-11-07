@@ -1,5 +1,5 @@
 import { connection, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getAdminSession } from "@/lib/auth";
 
 export async function GET() {
@@ -15,41 +15,44 @@ export async function GET() {
       );
     }
 
+    const supabase = createSupabaseAdminClient();
     const [
-      totalProducts,
-      activeProducts,
-      orders,
-      variants,
-      orderItems,
+      totalProductsResult,
+      activeProductsResult,
+      ordersResult,
     ] = await Promise.all([
-      prisma.product.count(),
-      prisma.product.count({
-        where: { isActive: true },
-      }),
-      prisma.order.findMany({
-        orderBy: { createdAt: "desc" },
-        include: { items: true },
-      }),
-      prisma.productVariant.findMany({
-        include: {
-          product: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              isActive: true,
-            },
-          },
-        },
-      }),
-      prisma.orderItem.findMany({
-        where: {
-          order: {
-            paymentStatus: "PAID",
-          },
-        },
-      }),
+      supabase.from("Product").select("id", { count: "exact", head: true }),
+      supabase
+        .from("Product")
+        .select("id", { count: "exact", head: true })
+        .eq("isActive", true),
+      supabase
+        .from("Order")
+        .select("*, items:OrderItem(*)")
+        .order("createdAt", { ascending: false }),
     ]);
+    for (const result of [
+      totalProductsResult,
+      activeProductsResult,
+      ordersResult,
+    ]) {
+      if (result.error) throw result.error;
+    }
+
+    const totalProducts = totalProductsResult.count ?? 0;
+    const activeProducts = activeProductsResult.count ?? 0;
+    const orders = ordersResult.data ?? [];
+    const paidOrderIds = orders
+      .filter((order) => order.paymentStatus === "PAID")
+      .map((order) => order.id);
+    const orderItemsResult = paidOrderIds.length
+      ? await supabase
+          .from("OrderItem")
+          .select("productId, productName, quantity, lineTotal")
+          .in("orderId", paidOrderIds)
+      : { data: [], error: null };
+    if (orderItemsResult.error) throw orderItemsResult.error;
+    const orderItems = orderItemsResult.data ?? [];
 
     const paidOrders = orders.filter(
       (order) => order.paymentStatus === "PAID"
@@ -75,22 +78,6 @@ export async function GET() {
     const deliveredOrders = orders.filter(
       (order) => order.orderStatus === "DELIVERED"
     ).length;
-
-    const lowStockVariants = variants
-      .filter(
-        (variant) =>
-          variant.product.isActive && variant.stock <= 5
-      )
-      .map((variant) => ({
-        id: variant.id,
-        productId: variant.productId,
-        productName: variant.product.name,
-        slug: variant.product.slug,
-        colour: variant.colour,
-        size: variant.size,
-        stock: variant.stock,
-      }))
-      .sort((a, b) => a.stock - b.stock);
 
     const salesByProduct = new Map<
       string,
@@ -149,7 +136,6 @@ export async function GET() {
         revenue,
       },
       topProducts,
-      lowStockVariants,
       recentOrders,
     });
   } catch (error) {

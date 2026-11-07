@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   matchesPaystackTransaction,
   parsePaystackTransaction,
@@ -29,9 +29,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const order = await prisma.order.findUnique({
-      where: { paymentReference: reference },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: order, error: orderError } = await supabase
+      .from("Order")
+      .select("*")
+      .eq("paymentReference", reference)
+      .maybeSingle();
+    if (orderError) throw orderError;
 
     if (!order) {
       return NextResponse.json(
@@ -128,22 +132,23 @@ export async function POST(request: Request) {
     }
 
     // Only one request can change a pending order to paid.
-    const update = await prisma.order.updateMany({
-      where: {
-        id: order.id,
-        paymentReference: reference,
-        paymentStatus: "PENDING",
-      },
-      data: {
-        paymentStatus: "PAID",
-        orderStatus: "PROCESSING",
-      },
-    });
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from("Order")
+      .update({ paymentStatus: "PAID", orderStatus: "PROCESSING" })
+      .eq("id", order.id)
+      .eq("paymentReference", reference)
+      .eq("paymentStatus", "PENDING")
+      .select("id")
+      .maybeSingle();
+    if (updateError) throw updateError;
 
-    if (update.count === 0) {
-      const latestOrder = await prisma.order.findUnique({
-        where: { id: order.id },
-      });
+    if (!updatedOrder) {
+      const { data: latestOrder, error: latestError } = await supabase
+        .from("Order")
+        .select("paymentStatus")
+        .eq("id", order.id)
+        .maybeSingle();
+      if (latestError) throw latestError;
 
       if (latestOrder?.paymentStatus !== "PAID") {
         return NextResponse.json(

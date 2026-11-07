@@ -22,12 +22,37 @@ import {
   parseProductColours,
   validateProductColourImageProofs,
 } from "../../src/lib/product-colours.mjs";
+import {
+  hashAuthRateLimitKey,
+  isValidCustomerPassword,
+  isValidEmail,
+  normalizeEmail,
+  safeRedirectPath,
+} from "../../src/lib/customer-auth.mjs";
 
 const order = {
   paymentReference: "FF-test-reference",
   total: 12500,
   customerEmail: "buyer@example.com",
 };
+
+test("customer auth validation normalizes identity and blocks unsafe redirects", () => {
+  assert.equal(normalizeEmail("  SHOPPER@Example.COM "), "shopper@example.com");
+  assert.equal(isValidEmail("shopper@example.com"), true);
+  assert.equal(isValidEmail("invalid"), false);
+  assert.equal(isValidCustomerPassword("long-enough-password"), true);
+  assert.equal(isValidCustomerPassword("short"), false);
+  assert.equal(
+    safeRedirectPath("/checkout?step=delivery"),
+    "/checkout?step=delivery"
+  );
+  assert.equal(safeRedirectPath("//evil.example"), "/account");
+  assert.equal(safeRedirectPath("https://evil.example"), "/account");
+  assert.equal(
+    hashAuthRateLimitKey("login", "SHOPPER@EXAMPLE.COM"),
+    hashAuthRateLimitKey("login", "shopper@example.com")
+  );
+});
 
 test("Paystack signature verification requires the exact HMAC", () => {
   const body = '{"event":"charge.success"}';

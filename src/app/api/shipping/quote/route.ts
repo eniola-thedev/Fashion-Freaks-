@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { NIGERIAN_STATES } from "@/lib/nigeria";
 import {
   requestShipbubbleQuote,
@@ -129,10 +129,14 @@ export async function POST(request: Request) {
       });
     }
 
-    const variants = await prisma.productVariant.findMany({
-      where: { id: { in: requestedItems.map((item) => item.variantId) } },
-      include: { product: true },
-    });
+    const supabase = createSupabaseAdminClient();
+    const { data: variants, error } = await supabase
+      .from("ProductVariant")
+      .select(
+        "id, productId, colour, isActive, product:Product!inner(name, price, discountPrice, isActive)"
+      )
+      .in("id", requestedItems.map((item) => item.variantId));
+    if (error) throw error;
     if (variants.length !== requestedItems.length) {
       return NextResponse.json(
         { error: "A product in your bag is no longer available." },
@@ -149,11 +153,10 @@ export async function POST(request: Request) {
       if (
         !variant ||
         !variant.isActive ||
-        !variant.product.isActive ||
-        variant.stock < item.quantity
+        !variant.product.isActive
       ) {
         throw new ShippingQuoteError(
-          "An item in your bag is no longer available in the requested quantity.",
+          "An item in your bag is no longer available.",
           409
         );
       }
